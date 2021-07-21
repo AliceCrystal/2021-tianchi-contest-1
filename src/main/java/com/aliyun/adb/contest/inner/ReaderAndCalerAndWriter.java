@@ -1,44 +1,44 @@
-package com.aliyun.adb.contest;
+package com.aliyun.adb.contest.inner;
 
 /**
  * @author gt
  * @date 2021/7/3 - 11:24
  */
 
+import com.aliyun.adb.contest.cache.CalAndWriteCache;
+import com.aliyun.adb.contest.cache.ReadAndCalCache;
 import com.aliyun.adb.contest.spi.AnalyticDB;
+import com.aliyun.adb.contest.thread.CalThread;
+import com.aliyun.adb.contest.thread.ReadThread;
+import com.aliyun.adb.contest.thread.WriteThread;
 
 import java.io.*;
 import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.LinkedBlockingDeque;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 
-public class EfficientAnalyticDB implements AnalyticDB {
+public class ReaderAndCalerAndWriter implements AnalyticDB {
     public static void main(String[] args) throws Exception {
-        EfficientAnalyticDB db = new EfficientAnalyticDB();
-        db.load("/Users/didi/Desktop/test_data", "./work");
-
+        ReaderAndCalerAndWriter db = new ReaderAndCalerAndWriter();
+        db.load("/Users/didi/Desktop/test_data_2", "./work");
     }
 
-
-
-    public static final int readerNum = 6;
-    public static final int calNum = 6;
-    public static final int threadNum = readerNum + calNum;
+    public static final int readerNum = 4;
+    public static final int calNum = 4;
+    public static final int writeNum = 4;
+    public static final int threadNum = readerNum + calNum + writeNum;
     public static final int bucketBits = 7;
     public static final int bucketsNum = 1 << bucketBits; // 桶数量，感觉桶数量可以设置多一些，前缀和数组那里可以二分查找
     public static final int rightShift = 63 - bucketBits;
 
     // 还有一些固定的超参数等用到再设定吧
-    public static final int threadBufferSize = 1024 * 1024 * 16; // (16MB)线程中每次MappedByteBuffer内存映射文件的大小
+    public static final int threadBufferSize = 1024 * 16; // (16MB)线程中每次MappedByteBuffer内存映射文件的大小
     public static final int longBufferSize = 1024 * 16;
-    public static final int quantileBufferSize = 1024 * 8 * 4; // (32K)查询时buffer的大小，因为每一个bucket-x文件平均也就1.5MB
+    public static final int quantileBufferSize = 8 * 4; // (32K)查询时buffer的大小，因为每一个bucket-x文件平均也就1.5MB
 
 
     public static CountDownLatch countDownLatch = new CountDownLatch(threadNum);
@@ -53,7 +53,6 @@ public class EfficientAnalyticDB implements AnalyticDB {
 
     public static int counter = 0; // 记录总共有多少行数据
     public static FileChannel[][][] fileChannels;
-    public static ByteBuffer[][][] byteBuffers;
     public static LongAdder[][] dataCounter; // colLen, bucketsNum, 对每一列，每个桶都记录数目
     public static int[][] preSum; // 前缀和数组
 
@@ -73,7 +72,7 @@ public class EfficientAnalyticDB implements AnalyticDB {
      * The implementation must contain a public no-argument constructor.
      *
      */
-    public EfficientAnalyticDB() {
+    public ReaderAndCalerAndWriter() {
 
     }
 
@@ -217,17 +216,14 @@ public class EfficientAnalyticDB implements AnalyticDB {
 
 
     // byteBuffer中写入的是long型数据，因此fileChannels中存的也是long整型数据
-    private void initBufAndChannelForEachBucket() throws FileNotFoundException {
-        fileChannels = new FileChannel[colLen][bucketsNum][calNum];
-        byteBuffers = new ByteBuffer[colLen][bucketsNum][calNum];
+    private void initChannelForEachBucket() throws FileNotFoundException {
+        fileChannels = new FileChannel[colLen][bucketsNum][writeNum];
         for (int i = 0; i < colLen; i++) {
             for (int j = 0; j < bucketsNum; j++) {
-                for (int k = 0; k < calNum; k++) {
-
+                for (int k = 0; k < writeNum; k++) {
                     String relativePath = workspaceDir + File.separator + tabName + File.separator +
                             colName[i] + File.separator + j + File.separator + "bucket-" + k;
                     fileChannels[i][j][k] = new RandomAccessFile(new File(relativePath), "rw").getChannel();
-                    byteBuffers[i][j][k] = ByteBuffer.allocateDirect(longBufferSize);
                 }
             }
         }
@@ -235,29 +231,38 @@ public class EfficientAnalyticDB implements AnalyticDB {
 
 
     // 开多个线程从磁盘中读取数据并写入bucket文件中
+    // 之前这么写的原因是因为读数据的线程速度很快，为了匹配速度，我们让一个读线程拥有多个readAndCalCache
+    // 每个计算线程仍然只对应一个readAndCalCache，但是最新发现，读速度，计算速度，写速度在不同的硬件下是不一样的，调参需要在阿里云上做
     private void readAndWrite(File dataFile) throws IOException, InterruptedException {
         FileChannel dataChannel = new RandomAccessFile(dataFile, "r").getChannel();
         Thread[] caler = new Thread[calNum];
         Thread[] reader = new Thread[readerNum];
+        Thread[] writer = new Thread[writeNum];
+
+        CalAndWriteCache calAndWriteCache = new CalAndWriteCache();
+
         for (int i = 0; i < readerNum; i++) {
             ReadAndCalCache[] readAndCalCaches = new ReadAndCalCache[calNum / readerNum];
             for (int j = 0; j < calNum / readerNum; j++) {
                 readAndCalCaches[j] = new ReadAndCalCache();
-                caler[i * calNum / readerNum + j] = new Thread(new CalThread(readAndCalCaches[j], i * calNum / readerNum + j));
+                caler[i * calNum / readerNum + j] = new Thread(new CalThread(i * calNum / readerNum + j, readAndCalCaches[j], calAndWriteCache));
             }
             reader[i] = new Thread(new ReadThread(dataChannel, readAndCalCaches));
         }
+        for (int i = 0; i < writeNum; i++) {
+            writer[i] = new Thread(new WriteThread(i, calAndWriteCache, fileChannels));
+        }
 
-        for (Thread t: reader) t.start();
+        for (Thread r: reader) r.start();
         for (Thread t: caler) t.start();
 
+        for (Thread w: writer) w.start();
+
         countDownLatch.await();
-        // 最后需要将writableQueue中剩下的任务完成，并将所有的FileChannel都关闭
+        // 将所有的FileChannel都关闭
         for (int i = 0; i < colLen; i++) {
             for (int j = 0; j < bucketsNum; j++) {
                 for (int k = 0; k < calNum; k++) {
-                    byteBuffers[i][j][k].flip();
-                    fileChannels[i][j][k].write(byteBuffers[i][j][k]);
                     fileChannels[i][j][k].close();
                 }
             }
@@ -280,7 +285,7 @@ public class EfficientAnalyticDB implements AnalyticDB {
         System.out.println("createBucketDirs cost: " + (System.currentTimeMillis() - createBucketDirs_start));
 
         long initBufAndChannelForEachBucket_start = System.currentTimeMillis();
-        initBufAndChannelForEachBucket();
+        initChannelForEachBucket();
         System.out.println("initBufAndChannelForEachBucket cost: " + (System.currentTimeMillis() - initBufAndChannelForEachBucket_start));
 
         long getPieceswise_start = System.currentTimeMillis();
@@ -331,161 +336,4 @@ public class EfficientAnalyticDB implements AnalyticDB {
 
 }
 
-class ReadThread implements Runnable{
-    // 给每个read thread一个MappedByteBuffer用于读取dataChannel中的数据
-    // read thread 每完成一个任务后就会从任务队列中取新的任务
-    private MappedByteBuffer mappedByteBuffer;
-    private FileChannel dataChannel;
-    private ReadAndCalCache[] readAndCalCaches;
-    private int cacheId;
-
-
-    public ReadThread(FileChannel dataChannel, ReadAndCalCache[] readAndCalCaches){
-        this.dataChannel = dataChannel;
-        this.readAndCalCaches = readAndCalCaches;
-        this.cacheId = 0;
-    }
-
-    @Override
-    public void run() {
-        // 只要有任务线程就不会停
-        while(!EfficientAnalyticDB.taskQueue.isEmpty()){
-            try {
-                // 从任务队列中拿出一个任务
-                long[] piece = EfficientAnalyticDB.taskQueue.take();
-
-                mappedByteBuffer = dataChannel.map(FileChannel.MapMode.READ_ONLY, piece[0], piece[1] - piece[0] + 1);
-                System.out.println("Start read segment: [" + piece[0] + ", " + piece[1] + "]");
-
-                while(mappedByteBuffer.remaining() >= ReadAndCalCache.sizeOfByteArray) {
-                    // 从emptyQueue中取出一个byte数组
-
-                    if (readAndCalCaches[cacheId].emptyBytesQueue.isEmpty()){
-                        EfficientAnalyticDB.readLA.add(1L);
-                    }
-                    // ***************************************************************************************
-                    // 这个地方~10%概率会阻塞，说明读线程速度很快，生产byte数组的速度快于计算线程消耗byte数组的速度
-                    byte[] bytes = readAndCalCaches[cacheId].emptyBytesQueue.take();
-
-                    // 将数据从磁盘读到byte数组中
-                    mappedByteBuffer.get(bytes);
-
-                    // 将byte数组放到fullQueue中
-
-                    readAndCalCaches[cacheId].fullBytesQueue.put(bytes);
-                }
-
-                // 但是有一个问题，如果最后mappedByteBuffer剩余的字节数小于bytes.length
-                // 调用mappedByteBuffer.get(bytes)会报错，需要做特殊处理
-                if(mappedByteBuffer.remaining() > 0){
-                    byte[] bytes = new byte[mappedByteBuffer.remaining()];
-                    mappedByteBuffer.get(bytes);
-                    readAndCalCaches[cacheId].fullBytesQueue.put(bytes);
-                }
-                // 向下一个readAndCalCaches写入数据
-                cacheId = (cacheId + 1) % readAndCalCaches.length;
-            } catch (InterruptedException | IOException e) {
-                e.printStackTrace();
-            }
-        }
-        // 循环结束后，最后传送一个 new byte[]{0}
-        try {
-            for (int i = 0; i < readAndCalCaches.length; i++) {
-                readAndCalCaches[i].fullBytesQueue.put(new byte[]{0});
-            }
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
-        EfficientAnalyticDB.countDownLatch.countDown();
-    }
-}
-
-class CalThread implements Runnable{
-    private ReadAndCalCache readAndCalCache;
-    private int threadId;
-    public CalThread(ReadAndCalCache readAndCalCache, int threadId){
-        this.readAndCalCache = readAndCalCache;
-        this.threadId = threadId;
-    }
-
-    // 那么问题来了，Calculate Thread什么时候结束呢? 读到文件结束符就结束
-    @Override
-    public void run() {
-        long[] nums = new long[EfficientAnalyticDB.colLen];
-        long tmp = 0;
-        outer:
-        while(true){
-            try {
-                // 从fullQueue中取出一个字节数组，开始计算
-                if(readAndCalCache.fullBytesQueue.isEmpty()){
-                    EfficientAnalyticDB.calLA.add(1L);
-                }
-                // 大约0.2%概率该队列中的byte数组为空，说明读线程生产byte数组速度足够快
-                byte[] bytes = readAndCalCache.fullBytesQueue.take();
-                for(byte b: bytes){
-                    if (b >= 48) {
-                        tmp = (tmp << 3) + (tmp << 1); // 相当于乘以10
-                        tmp += b - 48; // '0'的ASCII代码就是48
-                    } else if (b == 44) {
-                        // 44 为逗号的ASCII码
-                        // 读到第一个数，开始读第二个数
-                        nums[0] = tmp;
-                        tmp = 0;
-                    } else if (b == 10){
-                        // 10 为 '\n'的ASCII码
-                        nums[1] = tmp;
-                        tmp = 0;
-                        for (int i = 0; i < nums.length; i++) {
-                            int index = (int) (nums[i] >>> EfficientAnalyticDB.rightShift);
-
-                            EfficientAnalyticDB.byteBuffers[i][index][threadId].putLong(nums[i]);
-
-                            EfficientAnalyticDB.dataCounter[i][index].add(1L);
-
-                            if(EfficientAnalyticDB.byteBuffers[i][index][threadId].remaining() == 0){
-                                EfficientAnalyticDB.byteBuffers[i][index][threadId].flip();
-                                EfficientAnalyticDB.fileChannels[i][index][threadId].write(EfficientAnalyticDB.byteBuffers[i][index][threadId]);
-                                EfficientAnalyticDB.byteBuffers[i][index][threadId].clear();
-                            }
-                        }
-
-                    } else {
-                        // 即结束符，这里的结束符是我为每一对读线程和计算线程设计的
-                        break outer;
-                    }
-                }
-                // 如果是半包就不再放回emptyQueue，因为它无法复用
-                if(bytes.length == ReadAndCalCache.sizeOfByteArray){
-                    readAndCalCache.emptyBytesQueue.put(bytes);
-                }
-            } catch (InterruptedException | IOException e) {
-                e.printStackTrace();
-            }
-        }
-        EfficientAnalyticDB.countDownLatch.countDown();
-    }
-
-}
-
-// LinkedBlockingQueue的队头队尾都有锁，可以同时put和take，并发程度更高，适合作为缓冲区
-// bytesQueue同步阻塞队列作为读磁盘线程和计算线程的缓冲区
-// 设计两个bytesQueue的目的是，维持一个byte数组的池子，使byte数组可重复利用
-// 无有效数据的byte数组就放在emptyBytesQueue中，有 有效数据的byte数组就放在fullBytesQueue中
-// 必须为每对读线程和计算线程配备下面的两个队列，不然无法处理边界问题，因为每个线程领到的任务已经处理好边界了
-// 这个Cache不需要很大，但numOfByteArray不能太小，否则多线程会在队列中阻塞
-class ReadAndCalCache{
-    public static final int numOfByteArray = 1024;
-    public static final int sizeOfByteArray = 1024 * 8;
-    public LinkedBlockingQueue<byte[]> emptyBytesQueue;
-    public LinkedBlockingQueue<byte[]> fullBytesQueue;
-
-    // 初始化后，emptyBytesQueue中就有了多个可以反复使用的byte数组
-    public ReadAndCalCache(){
-        emptyBytesQueue = new LinkedBlockingQueue<>();
-        fullBytesQueue = new LinkedBlockingQueue<>();
-        for (int i = 0; i < numOfByteArray; i++) {
-            emptyBytesQueue.add(new byte[sizeOfByteArray]);
-        }
-    }
-}
 

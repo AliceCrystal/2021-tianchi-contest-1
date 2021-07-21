@@ -13,23 +13,19 @@ import java.util.concurrent.atomic.LongAdder;
 
 public class SimpleAnalyticDB implements AnalyticDB {
     public static void main(String[] args) throws Exception {
-//        SimpleAnalyticDB db = new SimpleAnalyticDB();
-//        db.load("./test_data", "./work");
+        SimpleAnalyticDB db = new SimpleAnalyticDB();
+        db.load("/Users/didi/Desktop/test_data", "./work");
     }
 
-    public static final int threadNum = 8;
-    public static final int bucketBits = 8;
+    public static final int threadNum = 12;
+    public static final int bucketBits = 7;
     public static final int bucketsNum = 1 << bucketBits; // 桶数量，感觉桶数量可以设置多一些，前缀和数组那里可以二分查找
     public static final int rightShift = 63 - bucketBits;
     // 还有一些固定的超参数等用到再设定吧
 
-//    public static final int threadBufferSize = 1024 * 1024 * 16; // (16MB)线程中buffer的大小
-//    public static final int longBufferSize = 1024 * 8 * 4; //(32KB)
-//    public static final int quantileBufferSize = 1024 * 8 * 4; // (32K)查询时buffer的大小，因为每一个bucket-x文件平均也就1.5MB
-
-    public static final int threadBufferSize = 1024; // (16MB)线程中buffer的大小
-    public static final int longBufferSize = 128; //(128K)
-    public static final int quantileBufferSize = 64; // (64K)查询时buffer的大小，因为每一个bucket-x文件平均也就1.5MB
+    public static final int threadBufferSize = 1024 * 1024 * 16; // (16MB)线程中buffer的大小
+    public static final int longBufferSize = 1024 * 8 * 4; //(32KB)
+    public static final int quantileBufferSize = 1024 * 8 * 4; // (32K)查询时buffer的大小，因为每一个bucket-x文件平均也就1.5MB
 
     public static CountDownLatch countDownLatch = new CountDownLatch(threadNum);
 
