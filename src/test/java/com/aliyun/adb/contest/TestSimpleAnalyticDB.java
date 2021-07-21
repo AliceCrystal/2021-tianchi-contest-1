@@ -14,8 +14,8 @@ public class TestSimpleAnalyticDB {
         File testDataDir = new File("./test_data");
         File testWorkspaceDir = new File("./work");
         File testResultsFile = new File("./test_result/results");
-        SimpleAnalyticDB analyticDB = new SimpleAnalyticDB();
-//        MmapThreadAnalyticDB_36S analyticDB = new MmapThreadAnalyticDB_36S();
+//        SimpleAnalyticDB analyticDB = new SimpleAnalyticDB();
+        MmapThreadAnalyticDB_36S analyticDB = new MmapThreadAnalyticDB_36S();
         // Step #1: load data
         analyticDB.load(testDataDir.getAbsolutePath(), testWorkspaceDir.getAbsolutePath());
 
