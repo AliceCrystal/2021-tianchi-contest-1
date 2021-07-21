@@ -399,7 +399,7 @@ public class MmapThreadAnalyticDB implements AnalyticDB {
     public static void main(String[] args) throws Exception {
         long l = System.currentTimeMillis();
         MmapThreadAnalyticDB noSortAnalyticDB = new MmapThreadAnalyticDB();
-        noSortAnalyticDB.load("./ceshi-300000000", "work");
+        noSortAnalyticDB.load("/Users/didi/Desktop/test_data", "work");
 //        noSortAnalyticDB.load("./test_data", "work");
         long l2 = System.currentTimeMillis();
         System.out.println("load use total: " + (l2 - l));

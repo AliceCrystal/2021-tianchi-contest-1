@@ -13,60 +13,19 @@ import java.util.concurrent.atomic.LongAdder;
 
 public class SimpleAnalyticDB implements AnalyticDB {
     public static void main(String[] args) throws Exception {
-//        SimpleAnalyticDB db = new SimpleAnalyticDB();
-//        db.load("./test_data", "./work");
-        String from = "./test_data/lineitem";
-        String to = "./test_data/lineitemss";
-        File file = new File(to);
-
-        FileChannel channel = new RandomAccessFile(new File(from), "r").getChannel();
-        ByteBuffer colBuffer = ByteBuffer.allocate(21);
-        ByteBuffer byteBuffer = ByteBuffer.allocate((int)channel.size() - 21);
-        channel.read(colBuffer);
-        colBuffer.flip();
-
-        channel.read(byteBuffer);
-        byteBuffer.flip();
-
-        FileChannel inChannel = new RandomAccessFile(file, "rw").getChannel();
-        inChannel.write(colBuffer);
-        for (int i = 0; i < 2; i++) {
-            if(i % 10 == 0){
-                System.out.println(i);
-            }
-            inChannel.write(byteBuffer);
-            byteBuffer.rewind();
-        }
-
-        ByteBuffer enterBuffer = ByteBuffer.allocate(1);
-        enterBuffer.put((byte)('\n'));
-        inChannel.write(enterBuffer);
-
-        inChannel.close();
-        channel.close();
-//        FileChannel channel = new RandomAccessFile(new File("./test_data/lineitemss"), "r").getChannel();
-//        System.out.println(channel.size());
-//        ByteBuffer byteBuffer = ByteBuffer.allocate((int)channel.size());
-//        channel.read(byteBuffer);
-//        byteBuffer.flip();
-//        System.out.println(byteBuffer.get(0)); // 读第一行第一个byte
-//        System.out.println(byteBuffer.get(20)); // 读第一行最后一个byte，也就是换行符
-//        System.out.println(byteBuffer.get((int)channel.size() - 1)); // 读文件的最后一个字符，居然仍然是换行符，可能windows没有文件结尾符号
+        SimpleAnalyticDB db = new SimpleAnalyticDB();
+        db.load("/Users/didi/Desktop/test_data", "./work");
     }
 
-    public static final int threadNum = 8;
-    public static final int bucketBits = 8;
+    public static final int threadNum = 12;
+    public static final int bucketBits = 7;
     public static final int bucketsNum = 1 << bucketBits; // 桶数量，感觉桶数量可以设置多一些，前缀和数组那里可以二分查找
     public static final int rightShift = 63 - bucketBits;
     // 还有一些固定的超参数等用到再设定吧
 
-//    public static final int threadBufferSize = 1024 * 1024 * 16; // (16MB)线程中buffer的大小
-//    public static final int longBufferSize = 1024 * 8 * 4; //(32KB)
-//    public static final int quantileBufferSize = 1024 * 8 * 4; // (32K)查询时buffer的大小，因为每一个bucket-x文件平均也就1.5MB
-
-    public static final int threadBufferSize = 1024; // (16MB)线程中buffer的大小
-    public static final int longBufferSize = 128; //(128K)
-    public static final int quantileBufferSize = 64; // (64K)查询时buffer的大小，因为每一个bucket-x文件平均也就1.5MB
+    public static final int threadBufferSize = 1024 * 1024 * 16; // (16MB)线程中buffer的大小
+    public static final int longBufferSize = 1024 * 8 * 4; //(32KB)
+    public static final int quantileBufferSize = 1024 * 8 * 4; // (32K)查询时buffer的大小，因为每一个bucket-x文件平均也就1.5MB
 
     public static CountDownLatch countDownLatch = new CountDownLatch(threadNum);
 
