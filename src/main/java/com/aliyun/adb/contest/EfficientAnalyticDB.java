@@ -22,14 +22,14 @@ import java.util.concurrent.atomic.LongAdder;
 public class EfficientAnalyticDB implements AnalyticDB {
     public static void main(String[] args) throws Exception {
         EfficientAnalyticDB db = new EfficientAnalyticDB();
-        db.load("/Users/csz/Desktop/test_data", "./work");
+        db.load("./test_data", "./work");
 
     }
 
 
 
-    public static final int readerNum = 6;
-    public static final int calNum = 6;
+    public static final int readerNum = 8;
+    public static final int calNum = 8;
     public static final int threadNum = readerNum + calNum;
     public static final int bucketBits = 7;
     public static final int bucketsNum = 1 << bucketBits; // 桶数量，感觉桶数量可以设置多一些，前缀和数组那里可以二分查找
@@ -48,6 +48,7 @@ public class EfficientAnalyticDB implements AnalyticDB {
     private Map<Integer, long[]> cacheOrderedBuckets = new HashMap<>();
     public static String tabName;
     public static String[] colName; // 列名
+    public static int firstLineLength = 0; // 第一行字节数
     public static int colLen; // 列数
     public static String workspaceDir; // 存放临时文件的工作目录
 
@@ -106,6 +107,7 @@ public class EfficientAnalyticDB implements AnalyticDB {
             // 将当前表中的数据读入内存中
             loadInMemroy(dataFile);
         }
+        throw new IllegalAccessException("****************************my exception demo*********************************");
 
     }
 
@@ -192,7 +194,9 @@ public class EfficientAnalyticDB implements AnalyticDB {
     private void initialize(File dataFile) throws IOException {
         BufferedReader reader = new BufferedReader(new FileReader(dataFile));
         this.tabName = dataFile.getName();
-        this.colName = reader.readLine().split(",");
+        String firstLine = reader.readLine();
+        this.firstLineLength = firstLine.length() + 1; //需要加上换行符
+        this.colName = firstLine.split(",");
         this.colLen = colName.length;
         this.dataCounter = new LongAdder[colLen][bucketsNum];
         this.preSum = new int[colLen][bucketsNum + 1]; // 有一个哨兵位置
@@ -268,7 +272,7 @@ public class EfficientAnalyticDB implements AnalyticDB {
     }
 
     // 单线程读取数据版本
-    private void loadInMemroy(File dataFile) throws IOException, InterruptedException {
+    private void loadInMemroy(File dataFile) throws IOException, InterruptedException, IllegalAccessException {
         long start = System.currentTimeMillis();
 
         long init_start = System.currentTimeMillis();
@@ -301,28 +305,35 @@ public class EfficientAnalyticDB implements AnalyticDB {
     // 分段函数，将整个文件分成piecewiseNum段，这个段数根据每个线程的byteBuffer大小而定
     // 注意这里每一段的字节数都是小于等于threadBufferSize
     // 因此，每个线程的byteBuffer正好可以一次完成这个读取任务
-    private void getPieceswise(File dataFile) throws IOException, InterruptedException {
+    private void getPieceswise(File dataFile) throws IOException, InterruptedException, IllegalAccessException {
         // 开始读文件
         FileChannel dataChannel = new RandomAccessFile(dataFile, "r").getChannel();
-        // 因为dataChannel第一行包括换行符有21个字节
-        dataChannel.position(21L);
+        // 因为dataChannel第一行包括换行符有firstLineLength个字节
+        dataChannel.position(firstLineLength);
 
         // 因为一行最多有40个字节，因此分段的时候要找到'\n'最多可能需要读40个字节
-        ByteBuffer buffer = ByteBuffer.allocateDirect(40);
-        long startReadPos = 21;
-        long endReadPos = 21 + threadBufferSize;
+        int tmpSize = 100;
+        ByteBuffer buffer = ByteBuffer.allocateDirect(tmpSize);
+        long startReadPos = firstLineLength;
+        long endReadPos = firstLineLength + threadBufferSize;
         // 这个表示从dataChannel的endReadPos开始读，并将buffer读满
+        int count = 0;
         while(true){
-            dataChannel.read(buffer, endReadPos - 40);
+            count++;
+            if(count > 100) {
+                throw new IllegalAccessException("****************************my exception demo*********************************");
+            }
+            dataChannel.read(buffer, endReadPos - tmpSize);
             buffer.flip();
             for (int i = buffer.limit() - 1; i >= 0 ; i--) {
                 if(buffer.get(i) == 10){ // 10为换行符的ASCII码
                     // 经过调试，endReadPos最终指向的就是换行符在dataChannel中的position
-                    endReadPos = endReadPos - 40 + i;break;
+                    endReadPos = endReadPos - tmpSize + i;break;
                 }
             }
             buffer.clear();
             taskQueue.put(new long[]{startReadPos, endReadPos});
+            System.out.println("segment: [" + startReadPos + ", " + endReadPos + "]");
             if(endReadPos == dataChannel.size() - 1) break;
             startReadPos = endReadPos + 1;
             endReadPos = Math.min(startReadPos + threadBufferSize, dataChannel.size());

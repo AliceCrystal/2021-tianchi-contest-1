@@ -1,6 +1,6 @@
 package com.aliyun.adb.contest.cache;
 
-import com.aliyun.adb.contest.inner.ReaderAndCalerAndWriter;
+import com.aliyun.adb.contest.core.ReaderAndCalerAndWriter;
 
 import java.util.concurrent.LinkedBlockingQueue;
 

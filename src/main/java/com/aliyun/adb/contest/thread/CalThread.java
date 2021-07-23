@@ -3,9 +3,7 @@ package com.aliyun.adb.contest.thread;
 import com.aliyun.adb.contest.cache.ByteBufferCache;
 import com.aliyun.adb.contest.cache.CalAndWriteCache;
 import com.aliyun.adb.contest.cache.ReadAndCalCache;
-import com.aliyun.adb.contest.inner.ReaderAndCalerAndWriter;
-
-import java.io.IOException;
+import com.aliyun.adb.contest.core.ReaderAndCalerAndWriter;
 
 public class CalThread implements Runnable {
     public int threadId;
